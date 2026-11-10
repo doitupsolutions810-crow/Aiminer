@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from aiminer import SCAN_CODES, Limits, ScanError, canonicalize, parse_json
+from aiminer import CANON_CODES, SCAN_CODES, CanonError, Limits, ScanError, canonicalize, parse_json
 from aiminer.corpus import build_cases
 from aiminer.__main__ import main
 
@@ -17,13 +17,18 @@ CASES = build_cases()
 @pytest.mark.parametrize("case", CASES, ids=[str(item["name"]) for item in CASES])
 def test_corpus_case(case: dict[str, object]) -> None:
     limits = Limits(**case["limits"]) if case["limits"] else Limits()
-    if case["code"] is not None:
-        with pytest.raises(ScanError) as caught:
-            parse_json(str(case["text"]), limits)
-        assert caught.value.code == case["code"]
-        assert caught.value.code in SCAN_CODES
+    try:
+        value = parse_json(str(case["text"]), limits)
+    except ScanError as exc:
+        assert case["code"] == exc.code
+        assert exc.code in SCAN_CODES
         return
-    value = parse_json(str(case["text"]), limits)
+    if case["code"] is not None:
+        with pytest.raises(CanonError) as caught:
+            canonicalize(value, limits)
+        assert caught.value.code == case["code"]
+        assert caught.value.code in CANON_CODES
+        return
     assert not isinstance(value, float)
     rendered = canonicalize(value, limits)
     assert rendered == case["canon"]

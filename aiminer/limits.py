@@ -15,6 +15,16 @@ def _bound(name: str, value: object, lo: int, hi: int) -> None:
         raise ValueError(name)
 
 
+def check_max_entries(value: object) -> int:
+    """Distinct-id cap. ``True`` is not ``1``."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("max_entries")
+    if value < 0 or value > 1_000_000:
+        raise ValueError("max_entries")
+    return value
+
+
 @dataclass(frozen=True)
 class Limits:
     """Caps for one parse or one canonical write.

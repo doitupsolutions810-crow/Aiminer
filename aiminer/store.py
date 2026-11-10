@@ -2,7 +2,11 @@
 
 The same correlation id and the same canonical value return the original
 receipt. The same id with a different canonical value is a conflict and does
-not replace the stored row. Omitting a correlation id is not this API; an
+not replace the stored row. A canon value that is not a blob, or a receipt
+that is not the sha256 of that blob, is corrupt and does not leave the
+write transaction open. A blob that hashes to its receipt but is not
+canonical JSON, such as ``1.0``, is corrupt rather than a conflict.
+Omitting a correlation id is not this API; an
 empty id is rejected. The id is not trimmed and is not NFKC-folded.
 """
 
@@ -15,9 +19,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aiminer.canon import canonical_bytes
-from aiminer.errors import CanonError, StoreError
+from aiminer.errors import CanonError, ScanError, StoreError
 from aiminer.ids import check_label
-from aiminer.limits import Limits
+from aiminer.limits import Limits, check_max_entries
+from aiminer.scan import parse_json
+
+# Highest legal caps. Re-reading a stored blob must not depend on the
+# caller's tighter caps, and must still reject a non-canonical document.
+_AUDIT_LIMITS = Limits(
+    max_depth=64,
+    max_string=1_000_000,
+    max_keys=100_000,
+    max_items=100_000,
+    max_nodes=1_000_000,
+    max_number_literal=10_000,
+    max_exponent=100_000,
+    max_chars=5_000_000,
+)
 
 
 @dataclass(frozen=True)
@@ -30,7 +48,8 @@ class Stored:
 class ReceiptStore:
     """SQLite ledger. One process may share it across threads."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, max_entries: int = 4096) -> None:
+        self._max_entries = check_max_entries(max_entries)
         if isinstance(path, Path):
             location: str | Path = path
         elif isinstance(path, str):
@@ -39,13 +58,19 @@ class ReceiptStore:
             raise ValueError("path")
         if location == "":
             raise ValueError("path")
+        try:
+            as_text = str(location)
+        except ValueError as exc:
+            raise StoreError("path", "unopenable") from exc
+        if "\x00" in as_text:
+            raise StoreError("path", "nul")
         if location != ":memory:":
             file_path = Path(location)
             if file_path.exists() and not file_path.is_file():
                 raise StoreError("path", "not a file")
         try:
             connection = sqlite3.connect(str(location), check_same_thread=False, isolation_level=None)
-        except sqlite3.OperationalError as exc:
+        except (sqlite3.OperationalError, ValueError) as exc:
             raise StoreError("path", "unopenable") from exc
         try:
             self._prepare(connection)
@@ -71,8 +96,15 @@ class ReceiptStore:
             info = connection.execute("PRAGMA table_info(receipts)").fetchall()
         except sqlite3.DatabaseError as exc:
             raise StoreError("corrupt", "database") from exc
-        columns = [row[1] for row in info]
-        if columns != ["correlation_id", "canon", "receipt"]:
+        # notnull is 0 on the text primary key: SQLite records it that way.
+        # canon and receipt are NOT NULL. A nullable canon is corrupt.
+        found = [(row[1], str(row[2]).upper(), int(row[3]), int(row[5])) for row in info]
+        expected = [
+            ("correlation_id", "TEXT", 0, 1),
+            ("canon", "BLOB", 1, 0),
+            ("receipt", "TEXT", 1, 0),
+        ]
+        if found != expected:
             raise StoreError("corrupt", "schema")
 
     def __enter__(self) -> "ReceiptStore":
@@ -119,20 +151,40 @@ class ReceiptStore:
                     (correlation_id,),
                 ).fetchone()
                 if row is None:
+                    count = connection.execute("SELECT COUNT(*) FROM receipts").fetchone()
+                    if count is None or int(count[0]) >= self._max_entries:
+                        connection.execute("ROLLBACK")
+                        if count is None:
+                            raise StoreError("corrupt", "count")
+                        return Stored(False, "too_many_entries", None)
                     connection.execute(
                         "INSERT INTO receipts(correlation_id, canon, receipt) VALUES (?, ?, ?)",
                         (correlation_id, canon, digest),
                     )
                     connection.execute("COMMIT")
                     return Stored(True, "created", digest)
-                if bytes(row[0]) == canon:
+                stored = _canon_bytes(row[0])
+                receipt = row[1]
+                # An integer or text value in the blob column is not a conflict.
+                # bytes(5) is five NUL bytes, and bytes(str) raises TypeError
+                # and used to leave this transaction open.
+                if not isinstance(receipt, str) or hashlib.sha256(stored).hexdigest() != receipt:
+                    raise StoreError("corrupt", "receipt")
+                _audit_canon(stored)
+                if stored == canon:
                     connection.execute("COMMIT")
-                    return Stored(True, "duplicate", row[1])
+                    return Stored(True, "duplicate", receipt)
                 connection.execute("ROLLBACK")
                 return Stored(False, "conflict", None)
+            except StoreError:
+                self._rollback(connection)
+                raise
             except sqlite3.DatabaseError as exc:
                 self._rollback(connection)
                 raise StoreError("corrupt", "write") from exc
+            except Exception:
+                self._rollback(connection)
+                raise
 
     def _require(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -145,3 +197,22 @@ class ReceiptStore:
             connection.execute("ROLLBACK")
         except sqlite3.DatabaseError:
             return
+
+
+def _canon_bytes(value: object) -> bytes:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        return value
+    raise StoreError("corrupt", "canon")
+
+
+def _audit_canon(stored: bytes) -> None:
+    try:
+        text = stored.decode("utf-8")
+        parsed = parse_json(text, _AUDIT_LIMITS)
+        again = canonical_bytes(parsed, _AUDIT_LIMITS)
+    except (UnicodeDecodeError, ScanError, CanonError) as exc:
+        raise StoreError("corrupt", "canon") from exc
+    if again != stored:
+        raise StoreError("corrupt", "canon")

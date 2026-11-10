@@ -37,6 +37,8 @@ SCAN_CODES = frozenset(
         "lone_surrogate",
         "control_char",
         "duplicate_key",
+        "key_collapse",
+        "format_char",
         "leading_zero",
         "invalid_number",
         "number_limit",
@@ -56,6 +58,8 @@ CANON_CODES = frozenset(
         "key_type",
         "key_collapse",
         "float",
+        "format_char",
+        "too_large",
         "invalid_number",
         "number_limit",
         "string_too_long",
@@ -89,6 +93,7 @@ INTAKE_ONLY_CODES = frozenset(
         "accepted",
         "duplicate",
         "conflict",
+        "too_many_entries",
     }
 )
 
@@ -101,6 +106,7 @@ STORE_ONLY_CODES = frozenset(
         "correlation_form",
         "correlation_reserved",
         "created",
+        "too_many_entries",
     }
 )
 
