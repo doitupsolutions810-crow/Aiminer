@@ -134,7 +134,7 @@ def test_id_and_type_edges() -> None:
     assert send(b'{"id":"a b","type":"event","payload":1}') == "id_chars"
     assert send(b'{"id":"a\\u0000b","type":"event","payload":1}') == "id_chars"
     assert send(b'{"id":"a\\u200bb","type":"event","payload":1}') == "id_chars"
-    assert send(b'{"id":"a\\u202eb","type":"event","payload":1}') == "id_chars"
+    assert send(b'{"id":"a\\u202eb","type":"event","payload":1}') == "format_char"
     assert send(b'{"id":"a\\u00a0b","type":"event","payload":1}') == "id_chars"
     assert send(b'{"id":".","type":"event","payload":1}') == "id_reserved"
     assert send(b'{"id":"..","type":"event","payload":1}') == "id_reserved"

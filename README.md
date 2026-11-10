@@ -15,7 +15,9 @@ A body is accepted only when every step below holds. The first failure is the de
 
 The same id and the same canonical value return the original receipt (`duplicate`). The same id with a different canonical value is `conflict` and does not replace the first row. Spacing, object key order, and equivalent numbers (`1`, `1.0`, `1e0`) share a receipt. `-0` is `0`. A number is never rounded to fit a precision; too many significant digits is `number_limit`.
 
-An intake without a store, and each `ReceiptStore`, keeps at most `max_entries` distinct ids (default 4096). A new id past that cap is `too_many_entries`. Replays and conflicts of ids already stored still work and do not free a slot. The ledger table must be the primary-key schema this library creates; a same-named table without that key is corrupt. A path containing NUL is rejected.
+An intake without a store, and each `ReceiptStore`, keeps at most `max_entries` distinct ids (default 4096). A new id past that cap is `too_many_entries`. Replays and conflicts of ids already stored still work and do not free a slot. The ledger table must be the primary-key schema this library creates; a same-named table without that key, with columns in another order, or with an extra column is corrupt. A path containing NUL, or a path that is a directory, is rejected.
+
+Bidirectional controls are rejected in every string (`format_char`): overrides, isolates, and the left-to-right, right-to-left, and Arabic letter marks. A zero-width joiner may appear in a payload and is still illegal in an id. Line and paragraph separators are allowed in strings and escaped in the canonical form. That form, and the plain spelling of a number, cannot exceed `max_chars`. `1e20` is `number_limit` when the spelling would be longer than the cap. A document that fits on the way in and only grows past the cap while it is canonicalized is `too_large`.
 
 Canonical object keys are NFC-normalized and ordered by UTF-16 code units. A composed character and its decomposed pair collapse. If that collapse makes two keys equal, the value is rejected. Nested containers are capped (default depth 32, hard ceiling 64) so a deep value returns `depth` instead of `RecursionError`. Digit runs past the literal cap stop being read. A literal inside the cap is kept exactly; it is not rounded to 28 digits.
 
@@ -43,4 +45,4 @@ python -m aiminer
 python -m pytest
 ```
 
-The suite covers a named corpus, every ASCII singleton, a dangerous two-character matrix, exponent and depth caps, UTF-16 key order, NFC collisions, surrogate pairs, auth-order precedence, exact token bytes, homoglyphs, ledger corruption, and a deterministic fuzz seeded with `0x41494D52`. Concurrent callers share one winner for one correlation id.
+The suite covers a named corpus, every ASCII singleton, a dangerous two-character matrix, exponent and depth caps, canonical width, bidirectional controls, UTF-16 key order, NFC collisions, surrogate pairs, auth-order precedence, exact token bytes, homoglyphs, ledger corruption, and a deterministic fuzz seeded with `0x41494D52`. Concurrent callers share one winner for one correlation id.

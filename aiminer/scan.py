@@ -6,13 +6,16 @@ stop being read once they pass the literal or exponent cap, so a multi-megabyte
 digit run cannot force a big integer allocation. Duplicate keys are rejected.
 ``1e309``, which :func:`json.loads` turns into infinity, is rejected.
 Only ASCII digits are numbers: fullwidth, Arabic-Indic, and superscript
-digits are not consumed and cannot alias ``12`` or ``0``.
+digits are not consumed and cannot alias ``12`` or ``0``. Bidirectional
+controls are rejected in every string. A number whose plain spelling would
+be longer than ``max_chars`` is ``number_limit`` before that spelling is built.
 """
 
 from __future__ import annotations
 
-from decimal import Context, Decimal, InvalidOperation, localcontext
+from decimal import Context, Decimal, DecimalException, localcontext
 
+from aiminer.canon import BIDI_CONTROLS, plain_parts, plain_width
 from aiminer.errors import ScanError
 from aiminer.limits import Limits
 
@@ -151,6 +154,8 @@ def _string(text: str, index: int, bounds: Limits) -> tuple[str, int]:
                 decoded = chr(code)
             else:
                 raise ScanError("invalid_escape", "unknown")
+            if decoded in BIDI_CONTROLS:
+                raise ScanError("format_char", "bidi")
             count += 1
             if count > bounds.max_string:
                 raise ScanError("string_too_long", "escape")
@@ -158,6 +163,8 @@ def _string(text: str, index: int, bounds: Limits) -> tuple[str, int]:
             continue
         if ord(char) < 0x20:
             raise ScanError("control_char", "raw control")
+        if char in BIDI_CONTROLS:
+            raise ScanError("format_char", "bidi")
         count += 1
         if count > bounds.max_string:
             raise ScanError("string_too_long", "char")
@@ -227,7 +234,7 @@ def _number(text: str, index: int, bounds: Limits) -> tuple[Decimal, int]:
         # longer literal that is still inside max_number_literal.
         with localcontext(Context(prec=bounds.max_number_literal + 4)):
             number = Decimal(literal)
-    except InvalidOperation as exc:
+    except DecimalException as exc:
         raise ScanError("invalid_number", "decimal") from exc
     if number.is_nan() or number.is_infinite():
         raise ScanError("invalid_number", "nonfinite")
@@ -235,6 +242,14 @@ def _number(text: str, index: int, bounds: Limits) -> tuple[Decimal, int]:
         adjusted = number.adjusted()
         if adjusted > bounds.max_exponent or adjusted < -bounds.max_exponent:
             raise ScanError("number_limit", "magnitude")
+        try:
+            parts = plain_parts(number)
+        except ValueError as exc:
+            raise ScanError("invalid_number", "exponent") from exc
+        if parts is not None:
+            sign, digits, exponent = parts
+            if plain_width(sign, len(digits), exponent) > bounds.max_chars:
+                raise ScanError("number_limit", "width")
     return number, index
 
 

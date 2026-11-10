@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aiminer.canon import canonicalize
 from aiminer.corpus import build_cases
-from aiminer.errors import ScanError
+from aiminer.errors import CanonError, ScanError
 from aiminer.limits import Limits
 from aiminer.scan import parse_json
 
@@ -23,10 +23,15 @@ def main() -> int:
         except Exception as exc:  # pragma: no cover - surfaced as a corpus failure
             failures.append(f"{item['name']}: {type(exc).__name__}")
             continue
+        try:
+            actual = canonicalize(value, limits)
+        except CanonError as exc:
+            if item["code"] != exc.code:
+                failures.append(f"{item['name']}: canon {exc.code}")
+            continue
         if item["code"] is not None:
             failures.append(f"{item['name']}: expected {item['code']}")
             continue
-        actual = canonicalize(value, limits)
         if actual != item["canon"]:
             failures.append(f"{item['name']}: canon {actual!r}")
             continue
