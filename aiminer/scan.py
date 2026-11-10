@@ -7,17 +7,24 @@ digit run cannot force a big integer allocation. Duplicate keys are rejected.
 ``1e309``, which :func:`json.loads` turns into infinity, is rejected.
 Only ASCII digits are numbers: fullwidth, Arabic-Indic, and superscript
 digits are not consumed and cannot alias ``12`` or ``0``. Bidirectional
-controls are rejected in every string. A number whose plain spelling would
+controls are rejected in every string. A raw surrogate is ``lone_surrogate``.
+``max_string`` is the length after NFC. A number whose plain spelling would
 be longer than ``max_chars`` is ``number_limit`` before that spelling is built.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from decimal import Context, Decimal, DecimalException, localcontext
 
 from aiminer.canon import BIDI_CONTROLS, plain_parts, plain_width
 from aiminer.errors import ScanError
 from aiminer.limits import Limits
+
+# One character's canonical decomposition is at most four code points, so a
+# string whose NFC form fits in max_string is at most four times that long
+# in the raw text. Past that bound the normalized form cannot fit.
+_NFC_RAW_LIMIT = 4
 
 _WS = frozenset(" \t\r\n")
 _HEX = frozenset("0123456789abcdefABCDEF")
@@ -130,7 +137,12 @@ def _string(text: str, index: int, bounds: Limits) -> tuple[str, int]:
     while index < length:
         char = text[index]
         if char == '"':
-            return "".join(out), index + 1
+            # Count the normalized length. U+FB2C is one raw character and
+            # three after NFC; a four-code-point decomposition can be one.
+            decoded = "".join(out)
+            if len(unicodedata.normalize("NFC", decoded)) > bounds.max_string:
+                raise ScanError("string_too_long", "nfc")
+            return decoded, index + 1
         if char == "\\":
             index += 1
             if index >= length:
@@ -157,7 +169,7 @@ def _string(text: str, index: int, bounds: Limits) -> tuple[str, int]:
             if decoded in BIDI_CONTROLS:
                 raise ScanError("format_char", "bidi")
             count += 1
-            if count > bounds.max_string:
+            if count > bounds.max_string * _NFC_RAW_LIMIT:
                 raise ScanError("string_too_long", "escape")
             out.append(decoded)
             continue
@@ -165,8 +177,10 @@ def _string(text: str, index: int, bounds: Limits) -> tuple[str, int]:
             raise ScanError("control_char", "raw control")
         if char in BIDI_CONTROLS:
             raise ScanError("format_char", "bidi")
+        if 0xD800 <= ord(char) <= 0xDFFF:
+            raise ScanError("lone_surrogate", "raw")
         count += 1
-        if count > bounds.max_string:
+        if count > bounds.max_string * _NFC_RAW_LIMIT:
             raise ScanError("string_too_long", "char")
         out.append(char)
         index += 1

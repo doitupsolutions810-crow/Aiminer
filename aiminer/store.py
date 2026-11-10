@@ -2,7 +2,9 @@
 
 The same correlation id and the same canonical value return the original
 receipt. The same id with a different canonical value is a conflict and does
-not replace the stored row. Omitting a correlation id is not this API; an
+not replace the stored row. A canon value that is not a blob, or a receipt
+that is not the sha256 of that blob, is corrupt and does not leave the
+write transaction open. Omitting a correlation id is not this API; an
 empty id is rejected. The id is not trimmed and is not NFKC-folded.
 """
 
@@ -78,11 +80,13 @@ class ReceiptStore:
             info = connection.execute("PRAGMA table_info(receipts)").fetchall()
         except sqlite3.DatabaseError as exc:
             raise StoreError("corrupt", "database") from exc
-        found = [(row[1], str(row[2]).upper(), row[5]) for row in info]
+        # notnull is 0 on the text primary key: SQLite records it that way.
+        # canon and receipt are NOT NULL. A nullable canon is corrupt.
+        found = [(row[1], str(row[2]).upper(), int(row[3]), int(row[5])) for row in info]
         expected = [
-            ("correlation_id", "TEXT", 1),
-            ("canon", "BLOB", 0),
-            ("receipt", "TEXT", 0),
+            ("correlation_id", "TEXT", 0, 1),
+            ("canon", "BLOB", 1, 0),
+            ("receipt", "TEXT", 1, 0),
         ]
         if found != expected:
             raise StoreError("corrupt", "schema")
@@ -132,8 +136,10 @@ class ReceiptStore:
                 ).fetchone()
                 if row is None:
                     count = connection.execute("SELECT COUNT(*) FROM receipts").fetchone()
-                    if int(count[0]) >= self._max_entries:
+                    if count is None or int(count[0]) >= self._max_entries:
                         connection.execute("ROLLBACK")
+                        if count is None:
+                            raise StoreError("corrupt", "count")
                         return Stored(False, "too_many_entries", None)
                     connection.execute(
                         "INSERT INTO receipts(correlation_id, canon, receipt) VALUES (?, ?, ?)",
@@ -141,14 +147,27 @@ class ReceiptStore:
                     )
                     connection.execute("COMMIT")
                     return Stored(True, "created", digest)
-                if bytes(row[0]) == canon:
+                stored = _canon_bytes(row[0])
+                receipt = row[1]
+                # An integer or text value in the blob column is not a conflict.
+                # bytes(5) is five NUL bytes, and bytes(str) raises TypeError
+                # and used to leave this transaction open.
+                if not isinstance(receipt, str) or hashlib.sha256(stored).hexdigest() != receipt:
+                    raise StoreError("corrupt", "receipt")
+                if stored == canon:
                     connection.execute("COMMIT")
-                    return Stored(True, "duplicate", row[1])
+                    return Stored(True, "duplicate", receipt)
                 connection.execute("ROLLBACK")
                 return Stored(False, "conflict", None)
+            except StoreError:
+                self._rollback(connection)
+                raise
             except sqlite3.DatabaseError as exc:
                 self._rollback(connection)
                 raise StoreError("corrupt", "write") from exc
+            except Exception:
+                self._rollback(connection)
+                raise
 
     def _require(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -161,3 +180,11 @@ class ReceiptStore:
             connection.execute("ROLLBACK")
         except sqlite3.DatabaseError:
             return
+
+
+def _canon_bytes(value: object) -> bytes:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        return value
+    raise StoreError("corrupt", "canon")

@@ -217,6 +217,19 @@ def build_cases() -> tuple[dict[str, object], ...]:
         _case("high-then-ascii", '"\\ud800\\u0041"', code="lone_surrogate"),
         _case("emoji-escape", '"\\ud83d\\ude00"', canon='"😀"'),
         _case("emoji-duplicate", '{"😀":1,"\\ud83d\\ude00":2}', code="duplicate_key"),
+        _case("plus-number", "+1", code="unexpected"),
+        _case("unicode-minus", "−1", code="unexpected"),
+        _case("fullwidth-plus", "＋1", code="unexpected"),
+        _case("underscore-number", "1_000", code="trailing_junk"),
+        _case("comma-number", "1,2", code="trailing_junk"),
+        _case("hex-number", "0x10", code="trailing_junk"),
+        _case("neg-lead-zero", "-01", code="leading_zero"),
+        _case("slash-escape", r'"\/"', canon='"/"'),
+        _case("slash-duplicate", r'{"\/":1,"/":2}', code="duplicate_key"),
+        _case("raw-surrogate", '"\ud800"', code="lone_surrogate"),
+        _case("nfc-grow-short", '"\ufb2c"', code="string_too_long", max_string=1),
+        _case("nfc-grow-fit", '"\ufb2c"', canon='"\u05e9\u05bc\u05c1"', max_string=3),
+        _case("nfd-fits", '"\u03b1\u0313\u0300\u0345"', canon='"\u1f82"', max_string=1),
     ]
     valid_escapes = set('"\\/bfnrtu')
     for ordinal in range(32, 127):
