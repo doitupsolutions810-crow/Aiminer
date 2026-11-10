@@ -12,6 +12,8 @@ Rejection order is part of the contract:
 5. The body must be one JSON value of the envelope ``id``, ``type``, ``payload``.
 6. Only a canonical match is stored. A second body with the same id and a
    different canonical value is ``conflict`` and leaves the first row in place.
+7. A memory intake stores at most ``max_entries`` distinct ids. A store has
+   its own cap. A full ledger rejects a new id and still replays the old one.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from aiminer.canon import canonical_bytes
 from aiminer.errors import INTAKE_RESULT_CODES, CanonError, ScanError, StoreError
 from aiminer.ids import check_label, check_type
-from aiminer.limits import Limits
+from aiminer.limits import Limits, check_max_entries
 from aiminer.scan import parse_json
 from aiminer.store import ReceiptStore, Stored
 
@@ -53,6 +55,7 @@ class Intake:
         boot: str | None = None,
         limits: Limits | None = None,
         store: ReceiptStore | None = None,
+        max_entries: int = 4096,
     ) -> None:
         if not isinstance(token, str) or token == "":
             raise ValueError("token")
@@ -72,10 +75,12 @@ class Intake:
         if store is not None and not isinstance(store, ReceiptStore):
             raise ValueError("store")
         self.token = token
+        self._token_digest = hashlib.sha256(token.encode("utf-8")).digest()
         self.max_bytes = max_bytes
         self.boot = boot
         self.limits = bounds
         self.store = store
+        self.max_entries = check_max_entries(max_entries)
         self._memory: dict[str, tuple[bytes, str]] = {}
         self._lock = threading.Lock()
 
@@ -85,11 +90,10 @@ class Intake:
         # compare_digest rejects non-ASCII str. Encode first so a token may
         # contain any Unicode scalar, and a lone surrogate cannot raise.
         try:
-            presented = token.encode("utf-8")
-            expected = self.token.encode("utf-8")
+            presented = hashlib.sha256(token.encode("utf-8")).digest()
         except UnicodeEncodeError:
             return False
-        return hmac.compare_digest(presented, expected)
+        return hmac.compare_digest(presented, self._token_digest)
 
     def submit(self, raw: object, token: object) -> Decision:
         if not isinstance(raw, (bytes, bytearray)):
@@ -136,6 +140,8 @@ class Intake:
         with self._lock:
             previous = self._memory.get(event_id)
             if previous is None:
+                if len(self._memory) >= self.max_entries:
+                    return self._finish(False, "too_many_entries", authed=True)
                 self._memory[event_id] = (canon, receipt)
                 return self._finish(
                     True, "accepted", receipt=receipt, canonical=canonical, authed=True
@@ -163,8 +169,8 @@ class Intake:
                 canonical=canonical,
                 authed=True,
             )
-        if stored.code == "conflict":
-            return self._finish(False, "conflict", authed=True)
+        if stored.code in INTAKE_RESULT_CODES:
+            return self._finish(False, stored.code, authed=True)
         raise StoreError("corrupt", stored.code)
 
     def _finish(

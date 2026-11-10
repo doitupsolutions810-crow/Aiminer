@@ -171,6 +171,23 @@ def build_cases() -> tuple[dict[str, object], ...]:
         _case("nodes-over", "[1]", code="too_many_nodes", max_nodes=1),
         _case("chars-over-space", " " * 20, code="too_large", max_chars=10),
         _case("depth-before-nodes", "[[1]]", code="depth", max_depth=1, max_nodes=1),
+        _case("fullwidth-only", "２", code="unexpected"),
+        _case("fullwidth-zero", "０", code="unexpected"),
+        _case("fullwidth-after", "1２", code="trailing_junk"),
+        _case("arabic-one", "١", code="unexpected"),
+        _case("arabic-after", "1١", code="trailing_junk"),
+        _case("superscript-after", "1²", code="trailing_junk"),
+        _case("exp-fullwidth", "1e２", code="invalid_number"),
+        _case("dot-then-exp", "1.e2", code="invalid_number"),
+        _case("lead-zero-exp", "01e2", code="leading_zero"),
+        _case("lead-zero-fraction", "00.1", code="leading_zero"),
+        _case("spaced-minus", "- 1", code="invalid_number"),
+        _case("double-plus-exp", "1e++1", code="invalid_number"),
+        _case("neg-zero-exp", "-0e+1", canon="0"),
+        _case("exp-signed-zero", "1e-0", canon="1"),
+        _case("exp-plus-zero", "1e+0", canon="1"),
+        _case("nested-trailing-comma", '{"a":[1,]}', code="trailing_comma"),
+        _case("fullwidth-string", '"２"', canon='"２"'),
     ]
     valid_escapes = set('"\\/bfnrtu')
     for ordinal in range(32, 127):

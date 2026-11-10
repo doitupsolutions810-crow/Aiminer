@@ -5,6 +5,8 @@ returns ``depth`` instead of raising ``RecursionError``. Number literals
 stop being read once they pass the literal or exponent cap, so a multi-megabyte
 digit run cannot force a big integer allocation. Duplicate keys are rejected.
 ``1e309``, which :func:`json.loads` turns into infinity, is rejected.
+Only ASCII digits are numbers: fullwidth, Arabic-Indic, and superscript
+digits are not consumed and cannot alias ``12`` or ``0``.
 """
 
 from __future__ import annotations
@@ -55,6 +57,10 @@ def parse_json(text: str, limits: Limits | None = None) -> object:
     return value
 
 
+def _ascii_digit(char: str) -> bool:
+    return "0" <= char <= "9"
+
+
 def _skip(text: str, index: int) -> int:
     length = len(text)
     while index < length and text[index] in _WS:
@@ -89,7 +95,7 @@ def _value(text: str, index: int, bounds: Limits, depth: int, nodes: _Nodes) -> 
         return _literal(text, index, "false", False)
     if char == "n":
         return _literal(text, index, "null", None)
-    if char == "-" or char.isdigit():
+    if char == "-" or _ascii_digit(char):
         return _number(text, index, bounds)
     raise ScanError("unexpected", "value")
 
@@ -100,7 +106,8 @@ def _literal(text: str, index: int, word: str, value: object) -> tuple[object, i
         raise ScanError("invalid_literal", word)
     if end < len(text):
         nxt = text[end]
-        if nxt.isalnum() or nxt == "_":
+        ascii_alnum = ("0" <= nxt <= "9") or ("A" <= nxt <= "Z") or ("a" <= nxt <= "z")
+        if ascii_alnum or nxt == "_":
             raise ScanError("invalid_literal", "prefix")
     return value, end
 
@@ -172,22 +179,22 @@ def _number(text: str, index: int, bounds: Limits) -> tuple[Decimal, int]:
         too_long()
         if index >= length:
             raise ScanError("invalid_number", "dangling minus")
-    if index >= length or not text[index].isdigit():
+    if index >= length or not _ascii_digit(text[index]):
         raise ScanError("invalid_number", "expected digit")
     if text[index] == "0":
         index += 1
         too_long()
-        if index < length and text[index].isdigit():
+        if index < length and _ascii_digit(text[index]):
             raise ScanError("leading_zero", "leading zero")
     else:
-        while index < length and text[index].isdigit():
+        while index < length and _ascii_digit(text[index]):
             index += 1
             too_long()
     if index < length and text[index] == ".":
         index += 1
         too_long()
         fraction = index
-        while index < length and text[index].isdigit():
+        while index < length and _ascii_digit(text[index]):
             index += 1
             too_long()
         if index == fraction:
@@ -201,7 +208,7 @@ def _number(text: str, index: int, bounds: Limits) -> tuple[Decimal, int]:
         exp_start = index
         exp_digits = 0
         digit_cap = len(str(bounds.max_exponent)) + 1
-        while index < length and text[index].isdigit():
+        while index < length and _ascii_digit(text[index]):
             exp_digits += 1
             index += 1
             too_long()
@@ -285,9 +292,11 @@ def _array(
     while True:
         if index >= len(text):
             raise ScanError("truncated", "array")
-        value, index = _value(text, index, bounds, depth + 1, nodes)
+        # A full array reports the cap before the extra element is read, so a
+        # deep or truncated tail cannot hide too_many_items.
         if len(items) >= bounds.max_items:
             raise ScanError("too_many_items", "array")
+        value, index = _value(text, index, bounds, depth + 1, nodes)
         items.append(value)
         index = _skip(text, index)
         if index >= len(text):

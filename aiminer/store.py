@@ -17,7 +17,7 @@ from pathlib import Path
 from aiminer.canon import canonical_bytes
 from aiminer.errors import CanonError, StoreError
 from aiminer.ids import check_label
-from aiminer.limits import Limits
+from aiminer.limits import Limits, check_max_entries
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,8 @@ class Stored:
 class ReceiptStore:
     """SQLite ledger. One process may share it across threads."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, max_entries: int = 4096) -> None:
+        self._max_entries = check_max_entries(max_entries)
         if isinstance(path, Path):
             location: str | Path = path
         elif isinstance(path, str):
@@ -39,13 +40,19 @@ class ReceiptStore:
             raise ValueError("path")
         if location == "":
             raise ValueError("path")
+        try:
+            as_text = str(location)
+        except ValueError as exc:
+            raise StoreError("path", "unopenable") from exc
+        if "\x00" in as_text:
+            raise StoreError("path", "nul")
         if location != ":memory:":
             file_path = Path(location)
             if file_path.exists() and not file_path.is_file():
                 raise StoreError("path", "not a file")
         try:
             connection = sqlite3.connect(str(location), check_same_thread=False, isolation_level=None)
-        except sqlite3.OperationalError as exc:
+        except (sqlite3.OperationalError, ValueError) as exc:
             raise StoreError("path", "unopenable") from exc
         try:
             self._prepare(connection)
@@ -71,8 +78,13 @@ class ReceiptStore:
             info = connection.execute("PRAGMA table_info(receipts)").fetchall()
         except sqlite3.DatabaseError as exc:
             raise StoreError("corrupt", "database") from exc
-        columns = [row[1] for row in info]
-        if columns != ["correlation_id", "canon", "receipt"]:
+        found = [(row[1], str(row[2]).upper(), row[5]) for row in info]
+        expected = [
+            ("correlation_id", "TEXT", 1),
+            ("canon", "BLOB", 0),
+            ("receipt", "TEXT", 0),
+        ]
+        if found != expected:
             raise StoreError("corrupt", "schema")
 
     def __enter__(self) -> "ReceiptStore":
@@ -119,6 +131,10 @@ class ReceiptStore:
                     (correlation_id,),
                 ).fetchone()
                 if row is None:
+                    count = connection.execute("SELECT COUNT(*) FROM receipts").fetchone()
+                    if int(count[0]) >= self._max_entries:
+                        connection.execute("ROLLBACK")
+                        return Stored(False, "too_many_entries", None)
                     connection.execute(
                         "INSERT INTO receipts(correlation_id, canon, receipt) VALUES (?, ?, ?)",
                         (correlation_id, canon, digest),

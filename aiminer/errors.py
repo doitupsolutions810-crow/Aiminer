@@ -89,6 +89,7 @@ INTAKE_ONLY_CODES = frozenset(
         "accepted",
         "duplicate",
         "conflict",
+        "too_many_entries",
     }
 )
 
@@ -101,6 +102,7 @@ STORE_ONLY_CODES = frozenset(
         "correlation_form",
         "correlation_reserved",
         "created",
+        "too_many_entries",
     }
 )
 

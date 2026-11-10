@@ -1,11 +1,13 @@
 """Canonical JSON.
 
 Numbers are exact :class:`~decimal.Decimal` values, not binary floats.
-``-0``, ``1.0``, ``1e0``, and ``1`` share one form. Object keys are NFC-normalized
-and ordered by UTF-16 code units (the RFC 8785 order), which differs from
-Unicode code-point order for non-BMP characters. A float is rejected so
-``0.1`` cannot enter through IEEE rounding. Shared or cyclic containers are
-rejected rather than written twice.
+``-0``, ``1.0``, ``1e0``, and ``1`` share one form. Digits are never rounded to
+fit a precision: too many significant digits is ``number_limit``. Object keys
+are NFC-normalized and ordered by UTF-16 code units (the RFC 8785 order),
+which differs from Unicode code-point order for non-BMP characters. A float
+is rejected so ``0.1`` cannot enter through IEEE rounding. Shared or cyclic
+containers are rejected rather than written twice. Lone surrogates in keys
+are ``lone_surrogate``, not ``UnicodeEncodeError``.
 """
 
 from __future__ import annotations
@@ -44,7 +46,17 @@ def _write(value: object, bounds: Limits, seen: set[int], depth: int, nodes: _No
     if isinstance(value, int):
         if value.bit_length() > 400:
             raise CanonError("number_limit", "bit length")
-        with localcontext(Context(prec=bounds.max_number_literal + 4)):
+        if value == 0:
+            return "0"
+        magnitude = abs(value)
+        digits = 1
+        rest = magnitude
+        while rest >= 10:
+            rest //= 10
+            digits += 1
+        if digits > bounds.max_number_literal or digits - 1 > bounds.max_exponent:
+            raise CanonError("number_limit", "magnitude")
+        with localcontext(Context(prec=digits + 2)):
             return _decimal(Decimal(value), bounds)
     if isinstance(value, Decimal):
         return _decimal(value, bounds)
@@ -62,30 +74,41 @@ def _write(value: object, bounds: Limits, seen: set[int], depth: int, nodes: _No
 
 
 def _decimal(number: Decimal, bounds: Limits) -> str:
-    with localcontext(Context(prec=bounds.max_number_literal + 4)):
-        if number.is_nan() or number.is_infinite():
-            raise CanonError("invalid_number", "nonfinite")
-        if number.is_zero():
-            return "0"
-        adjusted = number.adjusted()
-        if adjusted > bounds.max_exponent or adjusted < -bounds.max_exponent:
-            raise CanonError("number_limit", "magnitude")
-        parts = number.copy_abs().normalize().as_tuple()
-    if len(parts.digits) > bounds.max_number_literal:
-        raise CanonError("number_limit", "digits")
-    digits = "".join(str(digit) for digit in parts.digits)
+    # as_tuple() is exact. normalize() under a short Decimal context would
+    # round 40 nines into a power of ten and silently change the value.
+    if number.is_nan() or number.is_infinite():
+        raise CanonError("invalid_number", "nonfinite")
+    if number.is_zero():
+        return "0"
+    parts = number.as_tuple()
+    digits = [int(digit) for digit in parts.digits]
     exponent = parts.exponent
-    if not isinstance(exponent, int):
+    if not isinstance(exponent, int) or not digits:
         raise CanonError("invalid_number", "exponent")
-    sign = "-" if number.is_signed() else ""
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    if not digits:
+        return "0"
+    if len(digits) > bounds.max_number_literal:
+        raise CanonError("number_limit", "digits")
+    adjusted = exponent + len(digits) - 1
+    if adjusted > bounds.max_exponent or adjusted < -bounds.max_exponent:
+        raise CanonError("number_limit", "magnitude")
+    rendered = "".join(str(digit) for digit in digits)
+    sign = "-" if parts.sign else ""
     if exponent >= 0:
-        body = digits + ("0" * exponent)
-    elif len(digits) > -exponent:
-        split = len(digits) + exponent
-        body = digits[:split] + "." + digits[split:]
+        body = rendered + ("0" * exponent)
+    elif len(rendered) > -exponent:
+        split = len(rendered) + exponent
+        body = rendered[:split] + "." + rendered[split:]
     else:
-        body = "0." + ("0" * (-exponent - len(digits))) + digits
+        body = "0." + ("0" * (-exponent - len(rendered))) + rendered
     return sign + body
+
+
+def _has_surrogate(value: str) -> bool:
+    return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
 
 
 def _escape(value: str, bounds: Limits) -> str:
@@ -130,9 +153,13 @@ def _object(
     for key, child in value.items():
         if not isinstance(key, str):
             raise CanonError("key_type", type(key).__name__)
+        if _has_surrogate(key):
+            raise CanonError("lone_surrogate", "key")
         if len(folded) >= bounds.max_keys:
             raise CanonError("too_many_keys", "object")
         normalized = unicodedata.normalize("NFC", key)
+        if _has_surrogate(normalized):
+            raise CanonError("lone_surrogate", "key")
         if normalized in folded:
             raise CanonError("key_collapse", "nfc")
         folded[normalized] = child
