@@ -3,7 +3,9 @@
 The walker stops at ``max_depth`` (ceiling 64), so a deeply nested value
 returns ``depth`` instead of raising ``RecursionError``. Number literals
 stop being read once they pass the literal or exponent cap, so a multi-megabyte
-digit run cannot force a big integer allocation. Duplicate keys are rejected.
+digit run cannot force a big integer allocation. Duplicate keys are rejected. A key that repeats only after NFC is
+``key_collapse``, and that is reported before the value is read and before
+the key cap, so a missing value cannot hide the collision.
 ``1e309``, which :func:`json.loads` turns into infinity, is rejected.
 Only ASCII digits are numbers: fullwidth, Arabic-Indic, and superscript
 digits are not consumed and cannot alias ``12`` or ``0``. Bidirectional
@@ -273,6 +275,7 @@ def _object(
     index += 1
     index = _skip(text, index)
     found: dict[str, object] = {}
+    folded: set[str] = set()
     if index < len(text) and text[index] == "}":
         return found, index + 1
     while True:
@@ -285,16 +288,20 @@ def _object(
         if index >= len(text) or text[index] != ":":
             raise ScanError("unexpected", "colon")
         index = _skip(text, index + 1)
-        # A repeated or overflowing key is reported before a missing value, so
-        # truncation cannot hide the structural error.
+        # A repeated, NFC-collapsing, or overflowing key is reported before a
+        # missing value, so truncation cannot hide the structural error.
         if key in found:
             raise ScanError("duplicate_key", "object")
+        normalized = unicodedata.normalize("NFC", key)
+        if normalized in folded:
+            raise ScanError("key_collapse", "nfc")
         if len(found) >= bounds.max_keys:
             raise ScanError("too_many_keys", "object")
         if index >= len(text):
             raise ScanError("truncated", "object value")
         value, index = _value(text, index, bounds, depth + 1, nodes)
         found[key] = value
+        folded.add(normalized)
         index = _skip(text, index)
         if index >= len(text):
             raise ScanError("truncated", "object")

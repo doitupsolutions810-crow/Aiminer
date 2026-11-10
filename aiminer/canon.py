@@ -214,13 +214,13 @@ def _object(
             raise CanonError("key_type", type(key).__name__)
         if _has_surrogate(key):
             raise CanonError("lone_surrogate", "key")
-        if len(folded) >= bounds.max_keys:
-            raise CanonError("too_many_keys", "object")
         normalized = unicodedata.normalize("NFC", key)
         if _has_surrogate(normalized):
             raise CanonError("lone_surrogate", "key")
         if normalized in folded:
             raise CanonError("key_collapse", "nfc")
+        if len(folded) >= bounds.max_keys:
+            raise CanonError("too_many_keys", "object")
         folded[normalized] = child
     pieces: list[str] = []
     for key in sorted(folded, key=lambda item: item.encode("utf-16-be")):

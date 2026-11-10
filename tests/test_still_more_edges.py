@@ -223,8 +223,11 @@ def test_intake_precedence_nfc_and_conflicts() -> None:
     with pytest.raises(ScanError) as caught:
         parse_json('{"a":{"é":1,"e\\u0301":2}}', Limits(max_depth=1))
     assert caught.value.code == "depth"
+    with pytest.raises(ScanError) as caught:
+        parse_json('{"é":1,"e\\u0301":2}')
+    assert caught.value.code == "key_collapse"
     with pytest.raises(CanonError) as caught:
-        canonicalize(parse_json('{"é":1,"e\\u0301":2}'))
+        canonicalize({"é": 1, "e\u0301": 2})
     assert caught.value.code == "key_collapse"
 
     empty = Intake(token=TOKEN, max_entries=0, boot="56" * 16)

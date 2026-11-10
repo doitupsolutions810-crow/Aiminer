@@ -239,6 +239,18 @@ def build_cases() -> tuple[dict[str, object], ...]:
         _case("arabic-decimal", "1\u066b2", code="trailing_junk"),
         _case("nbsp-between-digits", "1\u00a02", code="trailing_junk"),
         _case("true-combining", "true\u0301", code="trailing_junk"),
+        _case("nfc-key-collapse", '{"é":1,"e\\u0301":2}', code="key_collapse"),
+        _case("nfc-key-hides-tail", '{"é":1,"e\\u0301":', code="key_collapse"),
+        _case("nfc-key-at-cap", '{"é":1,"e\\u0301":2}', code="key_collapse", max_keys=1),
+        _case("keys-at-cap", '{"a":1,"b":2}', code="too_many_keys", max_keys=1),
+        _case("exp-digit-pad", "1e01", canon="10"),
+        _case("exp-plus-leading-zero", "1e+01", canon="10"),
+        _case("zero-exp-zeros", "0e00", canon="0"),
+        _case("neg-double-zero", "-00", code="leading_zero"),
+        _case("exp-space", "1e 2", code="invalid_number"),
+        _case("number-space", "1 e2", code="trailing_junk"),
+        _case("array-hole", "[1,,2]", code="unexpected"),
+        _case("empty-key-dup", '{"":1,"":2}', code="duplicate_key"),
     ]
     valid_escapes = set('"\\/bfnrtu')
     for ordinal in range(32, 127):

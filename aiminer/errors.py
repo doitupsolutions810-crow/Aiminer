@@ -37,6 +37,7 @@ SCAN_CODES = frozenset(
         "lone_surrogate",
         "control_char",
         "duplicate_key",
+        "key_collapse",
         "format_char",
         "leading_zero",
         "invalid_number",
