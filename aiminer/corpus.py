@@ -230,6 +230,15 @@ def build_cases() -> tuple[dict[str, object], ...]:
         _case("nfc-grow-short", '"\ufb2c"', code="string_too_long", max_string=1),
         _case("nfc-grow-fit", '"\ufb2c"', canon='"\u05e9\u05bc\u05c1"', max_string=3),
         _case("nfd-fits", '"\u03b1\u0313\u0300\u0345"', canon='"\u1f82"', max_string=1),
+        _case("nbsp-object", "{\u00a0}", code="unexpected"),
+        _case("ideographic-space", "{\u3000}", code="unexpected"),
+        _case("vertical-tab-array", "[\u000b]", code="unexpected"),
+        _case("nbsp-after-number", '{"a":1\u00a0}', code="unexpected"),
+        _case("fullwidth-exp-letter", "1ｅ2", code="trailing_junk"),
+        _case("fullwidth-dot", "1．2", code="trailing_junk"),
+        _case("arabic-decimal", "1\u066b2", code="trailing_junk"),
+        _case("nbsp-between-digits", "1\u00a02", code="trailing_junk"),
+        _case("true-combining", "true\u0301", code="trailing_junk"),
     ]
     valid_escapes = set('"\\/bfnrtu')
     for ordinal in range(32, 127):

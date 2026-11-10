@@ -4,7 +4,9 @@ The same correlation id and the same canonical value return the original
 receipt. The same id with a different canonical value is a conflict and does
 not replace the stored row. A canon value that is not a blob, or a receipt
 that is not the sha256 of that blob, is corrupt and does not leave the
-write transaction open. Omitting a correlation id is not this API; an
+write transaction open. A blob that hashes to its receipt but is not
+canonical JSON, such as ``1.0``, is corrupt rather than a conflict.
+Omitting a correlation id is not this API; an
 empty id is rejected. The id is not trimmed and is not NFKC-folded.
 """
 
@@ -17,9 +19,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aiminer.canon import canonical_bytes
-from aiminer.errors import CanonError, StoreError
+from aiminer.errors import CanonError, ScanError, StoreError
 from aiminer.ids import check_label
 from aiminer.limits import Limits, check_max_entries
+from aiminer.scan import parse_json
+
+# Highest legal caps. Re-reading a stored blob must not depend on the
+# caller's tighter caps, and must still reject a non-canonical document.
+_AUDIT_LIMITS = Limits(
+    max_depth=64,
+    max_string=1_000_000,
+    max_keys=100_000,
+    max_items=100_000,
+    max_nodes=1_000_000,
+    max_number_literal=10_000,
+    max_exponent=100_000,
+    max_chars=5_000_000,
+)
 
 
 @dataclass(frozen=True)
@@ -154,6 +170,7 @@ class ReceiptStore:
                 # and used to leave this transaction open.
                 if not isinstance(receipt, str) or hashlib.sha256(stored).hexdigest() != receipt:
                     raise StoreError("corrupt", "receipt")
+                _audit_canon(stored)
                 if stored == canon:
                     connection.execute("COMMIT")
                     return Stored(True, "duplicate", receipt)
@@ -188,3 +205,14 @@ def _canon_bytes(value: object) -> bytes:
     if isinstance(value, bytes):
         return value
     raise StoreError("corrupt", "canon")
+
+
+def _audit_canon(stored: bytes) -> None:
+    try:
+        text = stored.decode("utf-8")
+        parsed = parse_json(text, _AUDIT_LIMITS)
+        again = canonical_bytes(parsed, _AUDIT_LIMITS)
+    except (UnicodeDecodeError, ScanError, CanonError) as exc:
+        raise StoreError("corrupt", "canon") from exc
+    if again != stored:
+        raise StoreError("corrupt", "canon")
